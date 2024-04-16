@@ -809,7 +809,10 @@ dtb-$(CONFIG_SOC_IMX6UL) += \
 	imx6ull-phytec-tauri-nand.dtb \
 	imx6ull-tqma6ull2-mba6ulx.dtb \
 	imx6ull-tqma6ull2l-mba6ulx.dtb \
-	imx6ull-versa256.dtb \
+	imx6ull-calixto-versa.dtb \
+	imx6ull-calixto-versa256.dtb \
+	imx6ull-calixto-versa512.dtb \
+	imx6ull-calixto-versa1024.dtb \
 	imx6ulz-14x14-evk.dtb \
 	imx6ulz-14x14-evk-btwifi.dtb \
 	imx6ulz-14x14-evk-btwifi-sdio3_0.dtb \

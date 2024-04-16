@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: (GPL-2.0 OR MIT)
-//
-// Copyright (C) 2016 Freescale Semiconductor, Inc.
+/*
+ * Copyright (C) 2024-2025 Calixto Systems Pvt Ltd - https://www.calixtosystems.com/
+ *
+ */
 
 /dts-v1/;
 
 #include "imx6ull.dtsi"
 
 / {
-	model = "Freescale i.MX6 ULL 14x14 EVK Board";
-	compatible = "fsl,imx6ull-14x14-evk", "fsl,imx6ull";
+	model = "IMX6ULL-CALIXTO-VERSA-SOM";
+	compatible = "calixto,imx6ull-calixto-versa-som", "fsl,imx6ull";
 
 	aliases {
 		i2c0 = &i2c1;
@@ -20,7 +22,7 @@
 
 	memory@80000000 {
 		device_type = "memory";
-		reg = <0x80000000 0x20000000>;
+		reg = <0x00000000 0x80000000 0x00000000 0x10000000>;
 	};
 
 	reserved-memory {
@@ -87,7 +89,7 @@
 	mdio {
 		#address-cells = <1>;
 		#size-cells = <0>;
-
+		
 		ethphy0: ethernet-phy@0 {
 			compatible = "ethernet-phy-ieee802.3-c22";
 			reg = <0>;
@@ -95,7 +97,7 @@
 			clock-names = "rmii-ref";
 
 		};
-
+		
 		ethphy1: ethernet-phy@1 {
 			compatible = "ethernet-phy-ieee802.3-c22";
 			reg = <1>;
@@ -221,6 +223,9 @@
 };
 
 &wdog1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_wdog>;
+	fsl,ext-reset-output;
 	status = "okay";
 };
 
@@ -425,5 +430,11 @@
 			MX6UL_PAD_NAND_DATA07__USDHC2_DATA7 0x170f9
 		>;
 	};
+	
+	pinctrl_wdog: wdoggrp {
+			fsl,pins = <
+				MX6UL_PAD_LCD_RESET__WDOG1_WDOG_ANY    0x30b0
+			>;
+		};
 
 };
