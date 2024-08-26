@@ -813,6 +813,10 @@ dtb-$(CONFIG_SOC_IMX6UL) += \
 	imx6ull-calixto-versa256.dtb \
 	imx6ull-calixto-versa512.dtb \
 	imx6ull-calixto-versa1024.dtb \
+	imx6ull-calixto-tiny.dtb \
+	imx6ull-calixto-tiny256.dtb \
+	imx6ull-calixto-tiny512.dtb \
+	imx6ull-calixto-tiny1024.dtb \
 	imx6ulz-14x14-evk.dtb \
 	imx6ulz-14x14-evk-btwifi.dtb \
 	imx6ulz-14x14-evk-btwifi-sdio3_0.dtb \
