@@ -2,7 +2,7 @@
 *
 *    The MIT License (MIT)
 *
-*    Copyright (c) 2014 - 2022 Vivante Corporation
+*    Copyright (c) 2014 - 2023 Vivante Corporation
 *
 *    Permission is hereby granted, free of charge, to any person obtaining a
 *    copy of this software and associated documentation files (the "Software"),
@@ -26,7 +26,7 @@
 *
 *    The GPL License (GPL)
 *
-*    Copyright (C) 2014 - 2022 Vivante Corporation
+*    Copyright (C) 2014 - 2023 Vivante Corporation
 *
 *    This program is free software; you can redistribute it and/or
 *    modify it under the terms of the GNU General Public License
@@ -51,7 +51,6 @@
 *    version of this file.
 *
 *****************************************************************************/
-
 
 #include "gc_hal_kernel_linux.h"
 #include "gc_hal_dump.h"
@@ -101,6 +100,11 @@ typedef struct trace_mem {
 traceMem *memTraceList;
 gctBOOL memTraceFlag = 1;
 #endif
+#endif
+
+#if gcdENABLE_GPU_WORK_PERIOD_TRACE
+#   include "gc_hal_kernel_trace_gpu_work.h"
+#   define ANDROID_FIRST_APPLICATION_UID    10000
 #endif
 
 #define _GC_OBJ_ZONE        gcvZONE_OS
@@ -272,7 +276,7 @@ _DestroyMdl(IN PLINUX_MDL Mdl)
 /*******************************************************************************
  ** Integer Id Management.
  */
-gceSTATUS
+static gceSTATUS
 _AllocateIntegerId(IN gcsINTEGER_DB_PTR Database,
                    IN gctPOINTER        KernelPointer,
                    OUT gctUINT32        *Id)
@@ -341,7 +345,7 @@ again:
     return gcvSTATUS_OK;
 }
 
-gceSTATUS
+static gceSTATUS
 _QueryIntegerId(IN gcsINTEGER_DB_PTR Database,
                 IN gctUINT32         Id,
                 OUT gctPOINTER       *KernelPointer)
@@ -373,7 +377,7 @@ _QueryIntegerId(IN gcsINTEGER_DB_PTR Database,
     return gcvSTATUS_NOT_FOUND;
 }
 
-gceSTATUS
+static gceSTATUS
 _DestroyIntegerId(IN gcsINTEGER_DB_PTR Database, IN gctUINT32 Id)
 {
     unsigned long flags = 0;
@@ -403,11 +407,15 @@ _QueryProcessPageTable(IN gctPOINTER Logical, OUT gctPHYS_ADDR_T *Address)
         /* vmalloc area. */
         *Address = page_to_phys(vmalloc_to_page(Logical)) | offset;
         return gcvSTATUS_OK;
-    } else if (virt_addr_valid(logical)) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+    } else if (virt_addr_valid((void *)logical)) {
+#else
+	} else if (virt_addr_valid(logical)) {
+#endif
         /* Kernel logical address. */
         *Address = virt_to_phys(Logical);
         return gcvSTATUS_OK;
-#if USING_PFN_FOLLOW
+#if USING_PFN_FOLLOW || (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0))
     } else {
         struct vm_area_struct *vma;
         unsigned long          pfn = 0;
@@ -419,7 +427,7 @@ _QueryProcessPageTable(IN gctPOINTER Logical, OUT gctPHYS_ADDR_T *Address)
             up_read(&current_mm_mmap_sem);
             return gcvSTATUS_NOT_FOUND;
         }
-        ret = pfn_follow(vma, addr, &pfn);
+        ret = follow_pfn(vma, logical, &pfn);
         up_read(&current_mm_mmap_sem);
         if (ret < 0) {
             return gcvSTATUS_NOT_FOUND;
@@ -712,7 +720,12 @@ gckOS_Construct(IN gctPOINTER Context, OUT gckOS *Os)
         /* Out of memory. */
         gcmkONERROR(gcvSTATUS_OUT_OF_MEMORY);
 
-    os->paddingPage = alloc_page(GFP_KERNEL | __GFP_HIGHMEM | gcdNOWARN);
+#if defined(CONFIG_ZONE_DMA32) && LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)
+    os->paddingPage = alloc_page(GFP_KERNEL | __GFP_DMA32 | gcdNOWARN);
+#else
+    os->paddingPage = alloc_page(GFP_KERNEL | __GFP_DMA | gcdNOWARN);
+#endif
+
     if (os->paddingPage == gcvNULL)
         /* Out of memory. */
         gcmkONERROR(gcvSTATUS_OUT_OF_MEMORY);
@@ -1158,6 +1171,7 @@ gckOS_UnmapMemory(IN gckOS        Os,
                   IN gctPOINTER   Logical)
 {
     gceSTATUS status = gcvSTATUS_OK;
+    
     gcmkHEADER_ARG("Os=%p Physical=0%p Bytes=0x%zx Logical=%p",
                    Os, Physical, Bytes, Logical);
 
@@ -2991,24 +3005,23 @@ gckOS_TicksAfter(IN gctUINT32 Time1, IN gctUINT32 Time2, OUT gctBOOL_PTR IsAfter
 gceSTATUS
 gckOS_GetTime(OUT gctUINT64_PTR Time)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 17, 0)
-    struct timespec64 tv;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)
+    struct timespec64 time;
 
     gcmkHEADER();
 
     /* Return the time of day in microseconds. */
-    ktime_get_real_ts64(&tv);
-    *Time = (tv.tv_sec * 1000000ULL) + (tv.tv_nsec / 1000);
+    ktime_get_boottime_ts64(&time);
 #else
-    struct timeval tv;
+    struct timespec time;
 
     gcmkHEADER();
 
     /* Return the time of day in microseconds. */
-    do_gettimeofday(&tv);
-    *Time = (tv.tv_sec * 1000000ULL) + tv.tv_usec;
-#endif
+   get_monotonic_boottime(&time);
 
+#endif
+    *Time = (time.tv_sec * 1000000ULL) + (time.tv_nsec / 1000);
     gcmkFOOTER_NO();
     return gcvSTATUS_OK;
 }
@@ -3066,6 +3079,16 @@ _ExternalCacheOperation(IN gckOS Os, IN gceCACHEOPERATION Operation)
 gceSTATUS
 gckOS_MemoryBarrier(IN gckOS Os, IN gctPOINTER Address)
 {
+#if gcdWAR_WC
+    gctUINT32 data;
+
+    if (Address)
+        gckOS_ReadMappedPointer(Os, Address, &data);
+
+    (void)data;
+#endif
+
+
     _MemoryBarrier();
 
     _ExternalCacheOperation(Os, gcvCACHE_INVALIDATE);
@@ -3145,7 +3168,7 @@ gckOS_AllocatePagedMemory(IN gckOS          Os,
     if ((Flag & gcvALLOC_FLAG_4GB_ADDR) && !zoneDMA32)
         Flag &= ~gcvALLOC_FLAG_4GB_ADDR;
 
-#if defined(CONFIG_ZONE_DMA32) && LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,37) \
+#if defined(CONFIG_ZONE_DMA32) && LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37) \
     || !defined(LINUX_CMA_FSL) || !LINUX_CMA_FSL
     /* redirect DMA32 pool for CMA LIMIT request */
     if (Flag & gcvALLOC_FLAG_CMA_LIMIT) {
@@ -6104,7 +6127,7 @@ gckOS_VerifyThread(IN gckOS Os, IN gctTHREAD Thread)
  ******************************** Software Timer ******************************
  *****************************************************************************/
 
-void
+static void
 _TimerFunction(struct work_struct *work)
 {
     gcsOSTIMER_PTR timer = (gcsOSTIMER_PTR)work;
@@ -7396,3 +7419,18 @@ gckOS_TraceGpuMemory(IN gckOS Os, IN gctINT32 ProcessID, IN gctINT64 Delta)
 #endif
     return gcvSTATUS_OK;
 }
+
+#if gcdENABLE_GPU_WORK_PERIOD_TRACE
+gceSTATUS
+gckOS_GetApplicationUserID(gctUINT32 CoreID)
+{
+    gctUINT32 UserID;
+
+    UserID = _GetUserID();
+
+    if (UserID >= ANDROID_FIRST_APPLICATION_UID)
+        trace_gpu_work_period(CoreID, UserID, 100000000, 300000000, 150000000);
+
+    return gcvSTATUS_OK;
+}
+#endif

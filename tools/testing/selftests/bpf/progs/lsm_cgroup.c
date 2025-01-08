@@ -7,6 +7,10 @@
 
 char _license[] SEC("license") = "GPL";
 
+extern bool CONFIG_SECURITY_SELINUX __kconfig __weak;
+extern bool CONFIG_SECURITY_SMACK __kconfig __weak;
+extern bool CONFIG_SECURITY_APPARMOR __kconfig __weak;
+
 #ifndef AF_PACKET
 #define AF_PACKET 17
 #endif
@@ -99,11 +103,15 @@ static __always_inline int real_bind(struct socket *sock,
 				     int addrlen)
 {
 	struct sockaddr_ll sa = {};
+	struct sock *sk = sock->sk;
 
-	if (sock->sk->__sk_common.skc_family != AF_PACKET)
+	if (!sk)
 		return 1;
 
-	if (sock->sk->sk_kern_sock)
+	if (sk->__sk_common.skc_family != AF_PACKET)
+		return 1;
+
+	if (sk->sk_kern_sock)
 		return 1;
 
 	bpf_probe_read_kernel(&sa, sizeof(sa), address);
@@ -140,6 +148,10 @@ SEC("lsm_cgroup/sk_alloc_security")
 int BPF_PROG(socket_alloc, struct sock *sk, int family, gfp_t priority)
 {
 	called_socket_alloc++;
+	/* if already have non-bpf lsms installed, EPERM will cause memory leak of non-bpf lsms */
+	if (CONFIG_SECURITY_SELINUX || CONFIG_SECURITY_SMACK || CONFIG_SECURITY_APPARMOR)
+		return 1;
+
 	if (family == AF_UNIX)
 		return 0; /* EPERM */
 

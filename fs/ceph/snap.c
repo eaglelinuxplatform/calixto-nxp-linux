@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/ceph/ceph_debug.h>
 
+#include <linux/fs.h>
 #include <linux/sort.h>
 #include <linux/slab.h>
 #include <linux/iversion.h>
@@ -328,7 +329,8 @@ static int cmpu64_rev(const void *a, const void *b)
 /*
  * build the snap context for a given realm.
  */
-static int build_snap_context(struct ceph_snap_realm *realm,
+static int build_snap_context(struct ceph_mds_client *mdsc,
+			      struct ceph_snap_realm *realm,
 			      struct list_head *realm_queue,
 			      struct list_head *dirty_realms)
 {
@@ -424,7 +426,8 @@ fail:
 /*
  * rebuild snap context for the given realm and all of its children.
  */
-static void rebuild_snap_realms(struct ceph_snap_realm *realm,
+static void rebuild_snap_realms(struct ceph_mds_client *mdsc,
+				struct ceph_snap_realm *realm,
 				struct list_head *dirty_realms)
 {
 	LIST_HEAD(realm_queue);
@@ -450,7 +453,8 @@ static void rebuild_snap_realms(struct ceph_snap_realm *realm,
 			continue;
 		}
 
-		last = build_snap_context(_realm, &realm_queue, dirty_realms);
+		last = build_snap_context(mdsc, _realm, &realm_queue,
+					  dirty_realms);
 		dout("%s %llx %p, %s\n", __func__, _realm->ino, _realm,
 		     last > 0 ? "is deferred" : !last ? "succeeded" : "failed");
 
@@ -659,7 +663,7 @@ int __ceph_finish_cap_snap(struct ceph_inode_info *ci,
 	capsnap->size = i_size_read(inode);
 	capsnap->mtime = inode->i_mtime;
 	capsnap->atime = inode->i_atime;
-	capsnap->ctime = inode->i_ctime;
+	capsnap->ctime = inode_get_ctime(inode);
 	capsnap->btime = ci->i_btime;
 	capsnap->change_attr = inode_peek_iversion_raw(inode);
 	capsnap->time_warp_seq = ci->i_time_warp_seq;
@@ -674,14 +678,17 @@ int __ceph_finish_cap_snap(struct ceph_inode_info *ci,
 		return 0;
 	}
 
-	/* Fb cap still in use, delay it */
-	if (ci->i_wb_ref) {
+	/*
+	 * Defer flushing the capsnap if the dirty buffer not flushed yet.
+	 * And trigger to flush the buffer immediately.
+	 */
+	if (ci->i_wrbuffer_ref) {
 		dout("%s %p %llx.%llx cap_snap %p snapc %p %llu %s s=%llu "
 		     "used WRBUFFER, delaying\n", __func__, inode,
 		     ceph_vinop(inode), capsnap, capsnap->context,
 		     capsnap->context->seq, ceph_cap_string(capsnap->dirty),
 		     capsnap->size);
-		capsnap->writing = 1;
+		ceph_queue_writeback(inode);
 		return 0;
 	}
 
@@ -692,8 +699,10 @@ int __ceph_finish_cap_snap(struct ceph_inode_info *ci,
 	     capsnap->size);
 
 	spin_lock(&mdsc->snap_flush_lock);
-	if (list_empty(&ci->i_snap_flush_item))
+	if (list_empty(&ci->i_snap_flush_item)) {
+		ihold(inode);
 		list_add_tail(&ci->i_snap_flush_item, &mdsc->snap_flush_list);
+	}
 	spin_unlock(&mdsc->snap_flush_lock);
 	return 1;  /* caller may want to ceph_flush_snaps */
 }
@@ -702,7 +711,8 @@ int __ceph_finish_cap_snap(struct ceph_inode_info *ci,
  * Queue cap_snaps for snap writeback for this realm and its children.
  * Called under snap_rwsem, so realm topology won't change.
  */
-static void queue_realm_cap_snaps(struct ceph_snap_realm *realm)
+static void queue_realm_cap_snaps(struct ceph_mds_client *mdsc,
+				  struct ceph_snap_realm *realm)
 {
 	struct ceph_inode_info *ci;
 	struct inode *lastinode = NULL;
@@ -766,8 +776,10 @@ int ceph_update_snap_trace(struct ceph_mds_client *mdsc,
 	struct ceph_snap_realm *realm;
 	struct ceph_snap_realm *first_realm = NULL;
 	struct ceph_snap_realm *realm_to_rebuild = NULL;
+	struct ceph_client *client = mdsc->fsc->client;
 	int rebuild_snapcs;
 	int err = -ENOMEM;
+	int ret;
 	LIST_HEAD(dirty_realms);
 
 	lockdep_assert_held_write(&mdsc->snap_rwsem);
@@ -847,7 +859,7 @@ more:
 
 	/* rebuild_snapcs when we reach the _end_ (root) of the trace */
 	if (realm_to_rebuild && p >= e)
-		rebuild_snap_realms(realm_to_rebuild, &dirty_realms);
+		rebuild_snap_realms(mdsc, realm_to_rebuild, &dirty_realms);
 
 	if (!first_realm)
 		first_realm = realm;
@@ -865,7 +877,7 @@ more:
 		realm = list_first_entry(&dirty_realms, struct ceph_snap_realm,
 					 dirty_item);
 		list_del_init(&realm->dirty_item);
-		queue_realm_cap_snaps(realm);
+		queue_realm_cap_snaps(mdsc, realm);
 	}
 
 	if (realm_ret)
@@ -884,6 +896,27 @@ fail:
 	if (first_realm)
 		ceph_put_snap_realm(mdsc, first_realm);
 	pr_err("%s error %d\n", __func__, err);
+
+	/*
+	 * When receiving a corrupted snap trace we don't know what
+	 * exactly has happened in MDS side. And we shouldn't continue
+	 * writing to OSD, which may corrupt the snapshot contents.
+	 *
+	 * Just try to blocklist this kclient and then this kclient
+	 * must be remounted to continue after the corrupted metadata
+	 * fixed in the MDS side.
+	 */
+	WRITE_ONCE(mdsc->fsc->mount_state, CEPH_MOUNT_FENCE_IO);
+	ret = ceph_monc_blocklist_add(&client->monc, &client->msgr.inst.addr);
+	if (ret)
+		pr_err("%s failed to blocklist %s: %d\n", __func__,
+		       ceph_pr_addr(&client->msgr.inst.addr), ret);
+
+	WARN(1, "%s: %s%sdo remount to continue%s",
+	     __func__, ret ? "" : ceph_pr_addr(&client->msgr.inst.addr),
+	     ret ? "" : " was blocklisted, ",
+	     err == -EIO ? " after corrupted snaptrace is fixed" : "");
+
 	return err;
 }
 
@@ -931,7 +964,7 @@ static void flush_snaps(struct ceph_mds_client *mdsc)
 void ceph_change_snap_realm(struct inode *inode, struct ceph_snap_realm *realm)
 {
 	struct ceph_inode_info *ci = ceph_inode(inode);
-	struct ceph_mds_client *mdsc = ceph_inode_to_client(inode)->mdsc;
+	struct ceph_mds_client *mdsc = ceph_inode_to_fs_client(inode)->mdsc;
 	struct ceph_snap_realm *oldrealm = ci->i_snap_realm;
 
 	lockdep_assert_held(&ci->i_ceph_lock);
@@ -984,6 +1017,10 @@ void ceph_handle_snap(struct ceph_mds_client *mdsc,
 	__le64 *split_inos = NULL, *split_realms = NULL;
 	int i;
 	int locked_rwsem = 0;
+	bool close_sessions = false;
+
+	if (!ceph_inc_mds_stopping_blocker(mdsc, session))
+		return;
 
 	/* decode */
 	if (msg->front.iov_len < sizeof(*h))
@@ -999,10 +1036,6 @@ void ceph_handle_snap(struct ceph_mds_client *mdsc,
 
 	dout("%s from mds%d op %s split %llx tracelen %d\n", __func__,
 	     mds, ceph_snap_op_name(op), split, trace_len);
-
-	mutex_lock(&session->s_mutex);
-	inc_session_sequence(session);
-	mutex_unlock(&session->s_mutex);
 
 	down_write(&mdsc->snap_rwsem);
 	locked_rwsem = 1;
@@ -1086,14 +1119,31 @@ skip_inode:
 				continue;
 			adjust_snap_realm_parent(mdsc, child, realm->ino);
 		}
+	} else {
+		/*
+		 * In the non-split case both 'num_split_inos' and
+		 * 'num_split_realms' should be 0, making this a no-op.
+		 * However the MDS happens to populate 'split_realms' list
+		 * in one of the UPDATE op cases by mistake.
+		 *
+		 * Skip both lists just in case to ensure that 'p' is
+		 * positioned at the start of realm info, as expected by
+		 * ceph_update_snap_trace().
+		 */
+		p += sizeof(u64) * num_split_inos;
+		p += sizeof(u64) * num_split_realms;
 	}
 
 	/*
 	 * update using the provided snap trace. if we are deleting a
 	 * snap, we can avoid queueing cap_snaps.
 	 */
-	ceph_update_snap_trace(mdsc, p, e,
-			       op == CEPH_SNAP_OP_DESTROY, NULL);
+	if (ceph_update_snap_trace(mdsc, p, e,
+				   op == CEPH_SNAP_OP_DESTROY,
+				   NULL)) {
+		close_sessions = true;
+		goto bad;
+	}
 
 	if (op == CEPH_SNAP_OP_SPLIT)
 		/* we took a reference when we created the realm, above */
@@ -1104,6 +1154,7 @@ skip_inode:
 	up_write(&mdsc->snap_rwsem);
 
 	flush_snaps(mdsc);
+	ceph_dec_mds_stopping_blocker(mdsc);
 	return;
 
 bad:
@@ -1112,6 +1163,11 @@ bad:
 out:
 	if (locked_rwsem)
 		up_write(&mdsc->snap_rwsem);
+
+	ceph_dec_mds_stopping_blocker(mdsc);
+
+	if (close_sessions)
+		ceph_mdsc_close_sessions(mdsc);
 	return;
 }
 

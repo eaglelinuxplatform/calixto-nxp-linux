@@ -81,7 +81,7 @@ static int mdsc_show(struct seq_file *s, void *p)
 		if (req->r_inode) {
 			seq_printf(s, " #%llx", ceph_ino(req->r_inode));
 		} else if (req->r_dentry) {
-			path = ceph_mdsc_build_path(req->r_dentry, &pathlen,
+			path = ceph_mdsc_build_path(mdsc, req->r_dentry, &pathlen,
 						    &pathbase, 0);
 			if (IS_ERR(path))
 				path = NULL;
@@ -100,7 +100,7 @@ static int mdsc_show(struct seq_file *s, void *p)
 		}
 
 		if (req->r_old_dentry) {
-			path = ceph_mdsc_build_path(req->r_old_dentry, &pathlen,
+			path = ceph_mdsc_build_path(mdsc, req->r_old_dentry, &pathlen,
 						    &pathbase, 0);
 			if (IS_ERR(path))
 				path = NULL;
@@ -248,14 +248,20 @@ static int metrics_caps_show(struct seq_file *s, void *p)
 	return 0;
 }
 
-static int caps_show_cb(struct inode *inode, struct ceph_cap *cap, void *p)
+static int caps_show_cb(struct inode *inode, int mds, void *p)
 {
+	struct ceph_inode_info *ci = ceph_inode(inode);
 	struct seq_file *s = p;
+	struct ceph_cap *cap;
 
-	seq_printf(s, "0x%-17llx%-3d%-17s%-17s\n", ceph_ino(inode),
-		   cap->session->s_mds,
-		   ceph_cap_string(cap->issued),
-		   ceph_cap_string(cap->implemented));
+	spin_lock(&ci->i_ceph_lock);
+	cap = __get_cap_for_mds(ci, mds);
+	if (cap)
+		seq_printf(s, "0x%-17llx%-3d%-17s%-17s\n", ceph_ino(inode),
+			   cap->session->s_mds,
+			   ceph_cap_string(cap->issued),
+			   ceph_cap_string(cap->implemented));
+	spin_unlock(&ci->i_ceph_lock);
 	return 0;
 }
 

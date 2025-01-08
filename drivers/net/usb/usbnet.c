@@ -61,9 +61,6 @@
 
 /*-------------------------------------------------------------------------*/
 
-// randomly generated ethernet address
-static u8	node_id [ETH_ALEN];
-
 /* use ethtool to change the level for any given device */
 static int msg_level = -1;
 module_param (msg_level, int, 0);
@@ -555,32 +552,30 @@ static int rx_submit (struct usbnet *dev, struct urb *urb, gfp_t flags)
 
 /*-------------------------------------------------------------------------*/
 
-static inline void rx_process (struct usbnet *dev, struct sk_buff *skb)
+static inline int rx_process(struct usbnet *dev, struct sk_buff *skb)
 {
 	if (dev->driver_info->rx_fixup &&
 	    !dev->driver_info->rx_fixup (dev, skb)) {
 		/* With RX_ASSEMBLE, rx_fixup() must update counters */
 		if (!(dev->driver_info->flags & FLAG_RX_ASSEMBLE))
 			dev->net->stats.rx_errors++;
-		goto done;
+		return -EPROTO;
 	}
 	// else network stack removes extra byte if we forced a short packet
 
 	/* all data was already cloned from skb inside the driver */
 	if (dev->driver_info->flags & FLAG_MULTI_PACKET)
-		goto done;
+		return -EALREADY;
 
 	if (skb->len < ETH_HLEN) {
 		dev->net->stats.rx_errors++;
 		dev->net->stats.rx_length_errors++;
 		netif_dbg(dev, rx_err, dev->net, "rx length %d\n", skb->len);
-	} else {
-		usbnet_skb_return(dev, skb);
-		return;
+		return -EPROTO;
 	}
 
-done:
-	skb_queue_tail(&dev->done, skb);
+	usbnet_skb_return(dev, skb);
+	return 0;
 }
 
 /*-------------------------------------------------------------------------*/
@@ -1514,6 +1509,14 @@ err:
 	return ret;
 }
 
+static inline void usb_free_skb(struct sk_buff *skb)
+{
+	struct skb_data *entry = (struct skb_data *)skb->cb;
+
+	usb_free_urb(entry->urb);
+	dev_kfree_skb(skb);
+}
+
 /*-------------------------------------------------------------------------*/
 
 // tasklet (work deferred from completions, in_irq) or timer
@@ -1528,15 +1531,14 @@ static void usbnet_bh (struct timer_list *t)
 		entry = (struct skb_data *) skb->cb;
 		switch (entry->state) {
 		case rx_done:
-			entry->state = rx_cleanup;
-			rx_process (dev, skb);
+			if (rx_process(dev, skb))
+				usb_free_skb(skb);
 			continue;
 		case tx_done:
 			kfree(entry->urb->sg);
 			fallthrough;
 		case rx_cleanup:
-			usb_free_urb (entry->urb);
-			dev_kfree_skb (skb);
+			usb_free_skb(skb);
 			continue;
 		default:
 			netdev_dbg(dev->net, "bogus skb state %d\n", entry->state);
@@ -1726,7 +1728,6 @@ usbnet_probe (struct usb_interface *udev, const struct usb_device_id *prod)
 
 	dev->net = net;
 	strscpy(net->name, "usb%d", sizeof(net->name));
-	eth_hw_addr_set(net, node_id);
 
 	/* rx and tx sides can use different message sizes;
 	 * bind() should set rx_urb_size in that case.
@@ -1770,6 +1771,10 @@ usbnet_probe (struct usb_interface *udev, const struct usb_device_id *prod)
 	} else if (!info->in || !info->out)
 		status = usbnet_get_endpoints (dev, udev);
 	else {
+		u8 ep_addrs[3] = {
+			info->in + USB_DIR_IN, info->out + USB_DIR_OUT, 0
+		};
+
 		dev->in = usb_rcvbulkpipe (xdev, info->in);
 		dev->out = usb_sndbulkpipe (xdev, info->out);
 		if (!(info->flags & FLAG_NO_SETINT))
@@ -1779,6 +1784,8 @@ usbnet_probe (struct usb_interface *udev, const struct usb_device_id *prod)
 		else
 			status = 0;
 
+		if (status == 0 && !usb_check_bulk_endpoints(udev, ep_addrs))
+			status = -EINVAL;
 	}
 	if (status >= 0 && dev->status)
 		status = init_status (dev, udev);
@@ -1794,9 +1801,9 @@ usbnet_probe (struct usb_interface *udev, const struct usb_device_id *prod)
 		goto out4;
 	}
 
-	/* let userspace know we have a random address */
-	if (ether_addr_equal(net->dev_addr, node_id))
-		net->addr_assign_type = NET_ADDR_RANDOM;
+	/* this flags the device for user space */
+	if (!is_valid_ether_addr(net->dev_addr))
+		eth_hw_addr_random(net);
 
 	if ((dev->driver_info->flags & FLAG_WLAN) != 0)
 		SET_NETDEV_DEVTYPE(net, &wlan_type);
@@ -2206,7 +2213,6 @@ static int __init usbnet_init(void)
 	BUILD_BUG_ON(
 		sizeof_field(struct sk_buff, cb) < sizeof(struct skb_data));
 
-	eth_random_addr(node_id);
 	return 0;
 }
 module_init(usbnet_init);

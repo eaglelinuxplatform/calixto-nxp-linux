@@ -22,9 +22,6 @@
 #include <net/netfilter/nf_conntrack_acct.h>
 #include <net/netfilter/nf_conntrack_zones.h>
 #include <net/netfilter/nf_conntrack_timestamp.h>
-#ifdef CONFIG_LWTUNNEL
-#include <net/netfilter/nf_hooks_lwtunnel.h>
-#endif
 #include <linux/rculist_nulls.h>
 
 static bool enable_hooks __read_mostly;
@@ -275,7 +272,7 @@ static const char* l4proto_name(u16 proto)
 	return "unknown";
 }
 
-static unsigned int
+static void
 seq_print_acct(struct seq_file *s, const struct nf_conn *ct, int dir)
 {
 	struct nf_conn_acct *acct;
@@ -283,14 +280,12 @@ seq_print_acct(struct seq_file *s, const struct nf_conn *ct, int dir)
 
 	acct = nf_conn_acct_find(ct);
 	if (!acct)
-		return 0;
+		return;
 
 	counter = acct->counter;
 	seq_printf(s, "packets=%llu bytes=%llu ",
 		   (unsigned long long)atomic64_read(&counter[dir].packets),
 		   (unsigned long long)atomic64_read(&counter[dir].bytes));
-
-	return 0;
 }
 
 /* return 0 on success, 1 in case of error */
@@ -342,8 +337,7 @@ static int ct_seq_show(struct seq_file *s, void *v)
 	if (seq_has_overflowed(s))
 		goto release;
 
-	if (seq_print_acct(s, ct, IP_CT_DIR_ORIGINAL))
-		goto release;
+	seq_print_acct(s, ct, IP_CT_DIR_ORIGINAL);
 
 	if (!(test_bit(IPS_SEEN_REPLY_BIT, &ct->status)))
 		seq_puts(s, "[UNREPLIED] ");
@@ -352,8 +346,7 @@ static int ct_seq_show(struct seq_file *s, void *v)
 
 	ct_show_zone(s, ct, NF_CT_ZONE_DIR_REPL);
 
-	if (seq_print_acct(s, ct, IP_CT_DIR_REPLY))
-		goto release;
+	seq_print_acct(s, ct, IP_CT_DIR_REPLY);
 
 	if (test_bit(IPS_HW_OFFLOAD_BIT, &ct->status))
 		seq_puts(s, "[HW_OFFLOAD] ");
@@ -601,7 +594,6 @@ enum nf_ct_sysctl_index {
 	NF_SYSCTL_CT_PROTO_TIMEOUT_SCTP_SHUTDOWN_RECD,
 	NF_SYSCTL_CT_PROTO_TIMEOUT_SCTP_SHUTDOWN_ACK_SENT,
 	NF_SYSCTL_CT_PROTO_TIMEOUT_SCTP_HEARTBEAT_SENT,
-	NF_SYSCTL_CT_PROTO_TIMEOUT_SCTP_HEARTBEAT_ACKED,
 #endif
 #ifdef CONFIG_NF_CT_PROTO_DCCP
 	NF_SYSCTL_CT_PROTO_TIMEOUT_DCCP_REQUEST,
@@ -616,9 +608,6 @@ enum nf_ct_sysctl_index {
 #ifdef CONFIG_NF_CT_PROTO_GRE
 	NF_SYSCTL_CT_PROTO_TIMEOUT_GRE,
 	NF_SYSCTL_CT_PROTO_TIMEOUT_GRE_STREAM,
-#endif
-#ifdef CONFIG_LWTUNNEL
-	NF_SYSCTL_CT_LWTUNNEL,
 #endif
 
 	__NF_SYSCTL_CT_LAST_SYSCTL,
@@ -886,12 +875,6 @@ static struct ctl_table nf_ct_sysctl_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_jiffies,
 	},
-	[NF_SYSCTL_CT_PROTO_TIMEOUT_SCTP_HEARTBEAT_ACKED] = {
-		.procname       = "nf_conntrack_sctp_timeout_heartbeat_acked",
-		.maxlen         = sizeof(unsigned int),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec_jiffies,
-	},
 #endif
 #ifdef CONFIG_NF_CT_PROTO_DCCP
 	[NF_SYSCTL_CT_PROTO_TIMEOUT_DCCP_REQUEST] = {
@@ -957,15 +940,6 @@ static struct ctl_table nf_ct_sysctl_table[] = {
 		.maxlen         = sizeof(unsigned int),
 		.mode           = 0644,
 		.proc_handler   = proc_dointvec_jiffies,
-	},
-#endif
-#ifdef CONFIG_LWTUNNEL
-	[NF_SYSCTL_CT_LWTUNNEL] = {
-		.procname	= "nf_hooks_lwtunnel",
-		.data		= NULL,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= nf_hooks_lwtunnel_sysctl_handler,
 	},
 #endif
 	{}
@@ -1035,7 +1009,6 @@ static void nf_conntrack_standalone_init_sctp_sysctl(struct net *net,
 	XASSIGN(SHUTDOWN_RECD, sn);
 	XASSIGN(SHUTDOWN_ACK_SENT, sn);
 	XASSIGN(HEARTBEAT_SENT, sn);
-	XASSIGN(HEARTBEAT_ACKED, sn);
 #undef XASSIGN
 #endif
 }
@@ -1118,7 +1091,9 @@ static int nf_conntrack_standalone_init_sysctl(struct net *net)
 		table[NF_SYSCTL_CT_BUCKETS].mode = 0444;
 	}
 
-	cnet->sysctl_header = register_net_sysctl(net, "net/netfilter", table);
+	cnet->sysctl_header = register_net_sysctl_sz(net, "net/netfilter",
+						     table,
+						     ARRAY_SIZE(nf_ct_sysctl_table));
 	if (!cnet->sysctl_header)
 		goto out_unregister_netfilter;
 
@@ -1230,11 +1205,12 @@ static int __init nf_conntrack_standalone_init(void)
 	nf_conntrack_htable_size_user = nf_conntrack_htable_size;
 #endif
 
+	nf_conntrack_init_end();
+
 	ret = register_pernet_subsys(&nf_conntrack_net_ops);
 	if (ret < 0)
 		goto out_pernet;
 
-	nf_conntrack_init_end();
 	return 0;
 
 out_pernet:

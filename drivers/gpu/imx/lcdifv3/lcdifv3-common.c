@@ -69,7 +69,7 @@ static struct lcdifv3_soc_pdata imx8mp_lcdif1_pdata = {
 static struct lcdifv3_soc_pdata imx8mp_lcdif2_pdata = {
 	.hsync_invert = false,
 	.vsync_invert = false,
-	.de_invert    = true,
+	.de_invert    = false,
 };
 
 static const struct of_device_id imx_lcdifv3_dt_ids[] = {
@@ -500,16 +500,6 @@ void lcdifv3_disable_controller(struct lcdifv3_soc *lcdifv3)
 	writel(disp_para, lcdifv3->base + LCDIFV3_DISP_PARA);
 }
 EXPORT_SYMBOL(lcdifv3_disable_controller);
-
-long lcdifv3_pix_clk_round_rate(struct lcdifv3_soc *lcdifv3,
-				unsigned long rate)
-{
-	if (unlikely(!rate))
-		return -EINVAL;
-
-	return clk_round_rate(lcdifv3->clk_pix, rate);
-}
-EXPORT_SYMBOL(lcdifv3_pix_clk_round_rate);
 
 static int platform_remove_device_fn(struct device *dev, void *data)
 {

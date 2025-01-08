@@ -36,6 +36,11 @@ struct sbitmap_word {
 	 * @cleared: word holding cleared bits
 	 */
 	unsigned long cleared ____cacheline_aligned_in_smp;
+
+	/**
+	 * @swap_lock: serializes simultaneous updates of ->word and ->cleared
+	 */
+	spinlock_t swap_lock;
 } ____cacheline_aligned_in_smp;
 
 /**
@@ -87,11 +92,6 @@ struct sbitmap {
  */
 struct sbq_wait_state {
 	/**
-	 * @wait_cnt: Number of frees remaining before we wake up.
-	 */
-	atomic_t wait_cnt;
-
-	/**
 	 * @wait: Wait queue.
 	 */
 	wait_queue_head_t wait;
@@ -138,6 +138,17 @@ struct sbitmap_queue {
 	 * sbitmap_queue_get_shallow()
 	 */
 	unsigned int min_shallow_depth;
+
+	/**
+	 * @completion_cnt: Number of bits cleared passed to the
+	 * wakeup function.
+	 */
+	atomic_t completion_cnt;
+
+	/**
+	 * @wakeup_cnt: Number of thread wake ups issued.
+	 */
+	atomic_t wakeup_cnt;
 };
 
 /**

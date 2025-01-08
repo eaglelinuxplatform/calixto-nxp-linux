@@ -11,10 +11,12 @@
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 
+#include "../host/xhci.h"
 #include "core.h"
 
 /* USB wakeup registers */
@@ -176,7 +178,6 @@ static struct xhci_plat_priv dwc3_imx8mp_xhci_priv = {
 static struct dwc3_platform_data dwc3_imx8mp_pdata = {
 	.xhci_priv = &dwc3_imx8mp_xhci_priv,
 	.set_role_post = dwc3_imx8mp_set_role_post,
-	.quirks = DWC3_SOFT_ITP_SYNC,
 };
 
 static struct of_dev_auxdata dwc3_imx8mp_auxdata[] = {
@@ -313,7 +314,7 @@ rel_high_bus:
 	return err;
 }
 
-static int dwc3_imx8mp_remove(struct platform_device *pdev)
+static void dwc3_imx8mp_remove(struct platform_device *pdev)
 {
 	struct dwc3_imx8mp *dwc3_imx = platform_get_drvdata(pdev);
 	struct device *dev = &pdev->dev;
@@ -326,9 +327,6 @@ static int dwc3_imx8mp_remove(struct platform_device *pdev)
 	release_bus_freq(BUS_FREQ_HIGH);
 	pm_runtime_disable(dev);
 	pm_runtime_put_noidle(dev);
-	platform_set_drvdata(pdev, NULL);
-
-	return 0;
 }
 
 static int __maybe_unused dwc3_imx8mp_suspend(struct dwc3_imx8mp *dwc3_imx,
@@ -460,7 +458,7 @@ MODULE_DEVICE_TABLE(of, dwc3_imx8mp_of_match);
 
 static struct platform_driver dwc3_imx8mp_driver = {
 	.probe		= dwc3_imx8mp_probe,
-	.remove		= dwc3_imx8mp_remove,
+	.remove_new	= dwc3_imx8mp_remove,
 	.driver		= {
 		.name	= "imx8mp-dwc3",
 		.pm	= &dwc3_imx8mp_dev_pm_ops,

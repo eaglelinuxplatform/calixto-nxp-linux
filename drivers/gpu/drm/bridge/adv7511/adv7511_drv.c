@@ -11,7 +11,6 @@
 #include <linux/media-bus-format.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/of_graph.h>
 #include <linux/slab.h>
 
@@ -75,25 +74,6 @@ static const uint8_t adv7511_register_defaults[] = {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x75, 0x11, 0x00, /* f0 */
 	0x00, 0x7c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-};
-
-/*
- * TODO: Currently, filter-out unsupported modes by their clocks.
- * Need to find a better way to do this.
- * These are the pixel clocks that the converter can handle successfully.
- */
-
-static const int valid_clocks[] = {
-	148500,
-	135000,
-	132000,
-	108000,
-	78750,
-	74250,
-	65000,
-	49500,
-	40000,
-	31500,
 };
 
 static bool adv7511_register_volatile(struct device *dev, unsigned int reg)
@@ -732,20 +712,8 @@ adv7511_detect(struct adv7511 *adv7511, struct drm_connector *connector)
 static enum drm_mode_status adv7511_mode_valid(struct adv7511 *adv7511,
 			      const struct drm_display_mode *mode)
 {
-	size_t i, num_modes = ARRAY_SIZE(valid_clocks);
-	bool clock_ok = false;
-
 	if (mode->clock > 165000)
 		return MODE_CLOCK_HIGH;
-
-	for (i = 0; i < num_modes; i++)
-		if (mode->clock == valid_clocks[i]) {
-			clock_ok = true;
-			break;
-		}
-
-	if (!clock_ok)
-		return MODE_NOCLOCK;
 
 	return MODE_OK;
 }
@@ -831,12 +799,12 @@ static void adv7511_mode_set(struct adv7511 *adv7511,
 	else
 		low_refresh_rate = ADV7511_LOW_REFRESH_RATE_NONE;
 
-	if (adv7511->type == ADV7535)
-		regmap_update_bits(adv7511->regmap, 0x4a,
-			0xc, low_refresh_rate << 2);
-	else
+	if (adv7511->type == ADV7511)
 		regmap_update_bits(adv7511->regmap, 0xfb,
-			0x6, low_refresh_rate << 1);
+				   0x6, low_refresh_rate << 1);
+	else
+		regmap_update_bits(adv7511->regmap, 0x4a,
+				   0xc, low_refresh_rate << 2);
 
 	regmap_update_bits(adv7511->regmap, 0x17,
 		0x60, (vsync_polarity << 6) | (hsync_polarity << 5));
@@ -959,15 +927,6 @@ static int adv7511_bridge_get_modes(struct drm_bridge *bridge,
 	return adv7511_get_modes(adv, connector);
 }
 
-static enum drm_mode_status adv7511_bridge_mode_valid(struct drm_bridge *bridge,
-					   const struct drm_display_info *info,
-					   const struct drm_display_mode *mode)
-{
-	struct adv7511 *adv = bridge_to_adv7511(bridge);
-
-	return adv7511_mode_valid(adv, mode);
-}
-
 static void adv7511_bridge_mode_set(struct drm_bridge *bridge,
 				    const struct drm_display_mode *mode,
 				    const struct drm_display_mode *adj_mode)
@@ -975,6 +934,18 @@ static void adv7511_bridge_mode_set(struct drm_bridge *bridge,
 	struct adv7511 *adv = bridge_to_adv7511(bridge);
 
 	adv7511_mode_set(adv, mode, adj_mode);
+}
+
+static enum drm_mode_status adv7511_bridge_mode_valid(struct drm_bridge *bridge,
+						      const struct drm_display_info *info,
+		const struct drm_display_mode *mode)
+{
+	struct adv7511 *adv = bridge_to_adv7511(bridge);
+
+	if (adv->type == ADV7533 || adv->type == ADV7535)
+		return adv7533_mode_valid(adv, mode);
+	else
+		return adv7511_mode_valid(adv, mode);
 }
 
 static int adv7511_bridge_attach(struct drm_bridge *bridge,
@@ -1042,8 +1013,8 @@ static const struct drm_bridge_funcs adv7511_bridge_funcs = {
 	.enable = adv7511_bridge_enable,
 	.disable = adv7511_bridge_disable,
 	.get_modes = adv7511_bridge_get_modes,
-	.mode_valid = adv7511_bridge_mode_valid,
 	.mode_set = adv7511_bridge_mode_set,
+	.mode_valid = adv7511_bridge_mode_valid,
 	.attach = adv7511_bridge_attach,
 	.detect = adv7511_bridge_detect,
 	.get_edid = adv7511_bridge_get_edid,
@@ -1260,8 +1231,9 @@ static int adv7511_parse_dt(struct device_node *np,
 	return 0;
 }
 
-static int adv7511_probe(struct i2c_client *i2c, const struct i2c_device_id *id)
+static int adv7511_probe(struct i2c_client *i2c)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(i2c);
 	struct adv7511_link_config link_config;
 	struct adv7511 *adv7511;
 	struct device *dev = &i2c->dev;
@@ -1302,10 +1274,8 @@ static int adv7511_probe(struct i2c_client *i2c, const struct i2c_device_id *id)
 		return ret;
 
 	ret = adv7511_init_regulators(adv7511);
-	if (ret) {
-		dev_err(dev, "failed to init regulators\n");
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to init regulators\n");
 
 	if (adv7511->addr_cec != 0)
 		cec_i2c_addr = adv7511->addr_cec << 1;
@@ -1437,9 +1407,11 @@ uninit_regulators:
 	if (ret == -EPROBE_DEFER)
 		return ret;
 
-	endpoint = of_graph_get_next_endpoint(dev->of_node, NULL);
-	if (endpoint)
+	endpoint = of_graph_get_endpoint_by_regs(dev->of_node, 0, -1);
+	if (endpoint) {
 		remote_node = of_graph_get_remote_port_parent(endpoint);
+		of_node_put(endpoint);
+	}
 
 	if (!remote_node)
 		return ret;

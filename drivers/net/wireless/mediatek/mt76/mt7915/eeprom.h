@@ -58,11 +58,6 @@ enum mt7915_eeprom_field {
 #define MT_EE_RATE_DELTA_SIGN			BIT(6)
 #define MT_EE_RATE_DELTA_EN			BIT(7)
 
-#define MT_EE_NSS_MAX_MA7915			4
-#define MT_EE_NSS_MAX_DBDC_MA7915		2
-#define MT_EE_NSS_MAX_MA7986			4
-#define MT_EE_NSS_MAX_DBDC_MA7986		4
-
 enum mt7915_adie_sku {
 	MT7976_ONE_ADIE_DBDC = 0x7,
 	MT7975_ONE_ADIE	= 0x8,
@@ -149,7 +144,8 @@ static inline bool
 mt7915_tssi_enabled(struct mt7915_dev *dev, enum nl80211_band band)
 {
 	u8 *eep = dev->mt76.eeprom.data;
-	u8 val = eep[MT_EE_WIFI_CONF + 7];
+	u8 offs = is_mt7981(&dev->mt76) ? 8 : 7;
+	u8 val = eep[MT_EE_WIFI_CONF + offs];
 
 	if (band == NL80211_BAND_2GHZ)
 		return val & MT_EE_WIFI_CONF7_TSSI0_2G;

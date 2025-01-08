@@ -36,7 +36,6 @@
 #include <linux/platform_device.h>
 #include <linux/fsl_devices.h>
 #include <linux/dmapool.h>
-#include <linux/of_device.h>
 
 #include <asm/byteorder.h>
 #include <asm/io.h>
@@ -672,7 +671,7 @@ static int fsl_ep_disable(struct usb_ep *_ep)
 static struct usb_request *
 fsl_alloc_request(struct usb_ep *_ep, gfp_t gfp_flags)
 {
-	struct fsl_req *req = NULL;
+	struct fsl_req *req;
 
 	req = kzalloc(sizeof *req, gfp_flags);
 	if (!req)
@@ -1943,7 +1942,6 @@ static int fsl_udc_start(struct usb_gadget *g,
 	/* lock is needed but whether should use this lock or another */
 	spin_lock_irqsave(&udc_controller->lock, flags);
 
-	driver->driver.bus = NULL;
 	/* hook up the driver */
 	udc_controller->driver = driver;
 	spin_unlock_irqrestore(&udc_controller->lock, flags);
@@ -2488,7 +2486,7 @@ static int fsl_udc_probe(struct platform_device *pdev)
 	/* setup the udc->eps[] for non-control endpoints and link
 	 * to gadget.ep_list */
 	for (i = 1; i < (int)(udc_controller->max_ep / 2); i++) {
-		char name[14];
+		char name[16];
 
 		sprintf(name, "ep%dout", i);
 		struct_ep_setup(udc_controller, i * 2, name, 1);
