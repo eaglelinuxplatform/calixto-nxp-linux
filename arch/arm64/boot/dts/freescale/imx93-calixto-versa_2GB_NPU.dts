@@ -14,7 +14,7 @@
 
 / {
 	model = "i.MX93 CALIXTO VERSA SOM";
-	compatible = "calixto,imx93-calixto-versa_1GB_NPU", "fsl,imx93";
+	compatible = "calixto,imx93-calixto-versa_2GB_NPU", "fsl,imx93";
 
 	chosen {
 		stdout-path = &lpuart1;
@@ -28,34 +28,34 @@
 		linux,cma {
 			compatible = "shared-dma-pool";
 			reusable;
-			alloc-ranges = <0 0x80000000 0 0x20000000>;
-			size = <0 0x08000000>;
+			alloc-ranges = <0 0x80000000 0 0x40000000>;
+			size = <0 0x10000000>;
 			linux,cma-default;
 		};
 
-		ethosu_mem: ethosu_region@A0000000 {
+		ethosu_mem: ethosu_region@C0000000 {
 			compatible = "shared-dma-pool";
 			reusable;
-			reg = <0x0 0xA0000000 0x0 0x08000000>;
+			reg = <0x0 0xC0000000 0x0 0x10000000>;
 		};
-  
-		vdev0vring0: vdev0vring0@92000000 {
-			reg = <0 0x92000000 0 0x4000>;
+
+		vdev0vring0: vdev0vring0@a4000000 {
+			reg = <0 0xa4000000 0 0x8000>;
 			no-map;
 		};
 
-		vdev0vring1: vdev0vring1@92004000 {
-			reg = <0 0x92004000 0 0x4000>;
+		vdev0vring1: vdev0vring1@a4008000 {
+			reg = <0 0xa4008000 0 0x8000>;
 			no-map;
 		};
 
-		vdev1vring0: vdev1vring0@92008000 {
-			reg = <0 0x92008000 0 0x4000>;
+		vdev1vring0: vdev1vring0@a4010000 {
+			reg = <0 0xa4010000 0 0x8000>;
 			no-map;
 		};
 
-		vdev1vring1: vdev1vring1@9200C000 {
-			reg = <0 0x9200C000 0 0x4000>;
+		vdev1vring1: vdev1vring1@a4018000 {
+			reg = <0 0xa4018000 0 0x8000>;
 			no-map;
 		};
 
@@ -64,15 +64,15 @@
 			no-map;
 		};
 
-		vdevbuffer: vdevbuffer@92010000 {
+		vdevbuffer: vdevbuffer@a4020000 {
 			compatible = "shared-dma-pool";
-			reg = <0 0x92010000 0 0x80000>;
+			reg = <0 0xa4020000 0 0x100000>;
 			no-map;
 		};
 
-		ele_reserved: ele-reserved@92090000 {
+		ele_reserved: ele-reserved@a4120000 {
 			compatible = "shared-dma-pool";
-			reg = <0 0x92090000  0 0x80000>;
+			reg = <0 0xa4120000 0 0x100000>;
 			no-map;
 		};
 	};
