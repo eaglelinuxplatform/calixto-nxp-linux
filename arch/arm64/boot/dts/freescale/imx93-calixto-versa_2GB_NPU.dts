@@ -146,6 +146,14 @@
 		regulator-always-on;
 	};
 	
+	/* It's a 25MHz crystal oscillator on OV5640 camera board */
+	cam_xtal: cam-xtal {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <24000000>;
+		clock-output-names = "cam_xtal";
+	};
+	
 	
 	lvds_backlight: lvds_backlight {
 		compatible = "pwm-backlight";
@@ -315,6 +323,23 @@
 	pinctrl-0 = <&pinctrl_lpi2c1>;
 	pinctrl-1 = <&pinctrl_lpi2c1>;
 	status = "okay";
+	
+	ov5640_mipi: ov5640_mipi@3c {
+		compatible = "ovti,ov5640";
+		reg = <0x3c>;
+		clocks = <&cam_xtal>;
+		clock-names = "xclk";
+		//powerdown-gpios = <&ioexpander1 6 GPIO_ACTIVE_LOW>;
+		reset-gpios = <&gpio2 27 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+
+		port {
+			ov5640_mipi_ep: endpoint {
+				remote-endpoint = <&mipi_csi_ep>;
+				data-lanes = <2>;
+			};
+		};
+	};
 
 };
 
@@ -462,6 +487,20 @@
 	status = "okay";
 };
 
+&mipi_csi {
+	status = "okay";
+
+	port {
+		mipi_csi_ep: endpoint {
+			remote-endpoint = <&ov5640_mipi_ep>;
+			data-lanes = <2>;
+			cfg-clk-range = <28>;
+			hs-clk-range = <0x16>;
+			bus-type = <4>;
+		};
+	};
+};
+
 &iomuxc {
 
         
@@ -528,6 +567,7 @@
 		fsl,pins = <
 			MX93_PAD_I2C1_SCL__LPI2C1_SCL			0x40000b9e
 			MX93_PAD_I2C1_SDA__LPI2C1_SDA			0x40000b9e
+			MX93_PAD_GPIO_IO27__GPIO2_IO27                  0x31e
 		>;
 	};
 
@@ -622,5 +662,17 @@
 
 &epxp {
 	status = "okay";
+};
+
+&cameradev {
+	status = "okay";
+};
+
+&isi_0 {
+	status = "okay";
+
+	cap_device {
+		status = "okay";
+	};
 };
 
